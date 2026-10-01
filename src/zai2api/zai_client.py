@@ -48,6 +48,42 @@ class UpstreamResult:
     finish_reason: str
 
 
+def parse_sse_line(line: str) -> tuple[bool, UpstreamChunk | None]:
+    """Parse a single SSE ``data:`` line from the v2 completion stream.
+
+    Returns ``(done, chunk)`` where ``done`` is True only for the ``[DONE]``
+    terminator and ``chunk`` is None for blank lines, non-data lines and
+    foreign events. Error payloads come back as a chunk with ``error`` set.
+    """
+    line = line.strip()
+    if not line or not line.startswith("data:"):
+        return False, None
+    payload = line[5:].strip()
+    if payload == "[DONE]":
+        return True, None
+    try:
+        event = json.loads(payload)
+    except json.JSONDecodeError:
+        return False, None
+    if event.get("type") != "chat:completion":
+        return False, None
+
+    data = event.get("data", {})
+    error = data.get("error")
+    if error:
+        detail = error.get("detail") if isinstance(error, dict) else str(error)
+        return False, UpstreamChunk(phase=None, text="", done=True, error=detail)
+
+    usage = normalize_usage(data.get("usage")) if data.get("usage") else None
+    text = data.get("delta_content") or data.get("content") or ""
+    return False, UpstreamChunk(
+        phase=data.get("phase") or "answer",
+        text=text,
+        usage=usage,
+        done=bool(data.get("done")),
+    )
+
+
 class ZAIClient:
     def __init__(
         self,
@@ -319,32 +355,12 @@ class ZAIClient:
 
     async def _iter_sse(self, response: httpx.Response) -> AsyncIterator[UpstreamChunk]:
         async for line in response.aiter_lines():
-            line = line.strip()
-            if not line or not line.startswith("data:"):
-                continue
-            payload = line[5:].strip()
-            if payload == "[DONE]":
+            done, chunk = parse_sse_line(line)
+            if done:
                 break
-
-            event = json.loads(payload)
-            if event.get("type") != "chat:completion":
+            if chunk is None:
                 continue
-
-            data = event.get("data", {})
-            error = data.get("error")
-            if error:
-                detail = error.get("detail") if isinstance(error, dict) else str(error)
-                yield UpstreamChunk(phase=None, text="", done=True, error=detail)
-                continue
-
-            usage = normalize_usage(data.get("usage")) if data.get("usage") else None
-            text = data.get("delta_content") or data.get("content") or ""
-            yield UpstreamChunk(
-                phase=data.get("phase") or "answer",
-                text=text,
-                usage=usage,
-                done=bool(data.get("done")),
-            )
+            yield chunk
 
     def _sign_prompt(
         self,

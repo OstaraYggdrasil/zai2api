@@ -32,3 +32,4 @@ wheels/
 .DS_Store
 .idea/
 .vscode/
+data/

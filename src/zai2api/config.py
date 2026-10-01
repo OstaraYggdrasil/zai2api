@@ -48,6 +48,15 @@ class Settings:
     zai_session_token: str | None = os.getenv("ZAI_SESSION_TOKEN")
     default_model: str = os.getenv("DEFAULT_MODEL", "glm-5.3")
     request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", "120"))
+    # Transport selection: "browser" (default) drives the real webpage through
+    # a headed Chromium, which passes the completion CAPTCHA transparently;
+    # "http" uses raw HTTP (currently rejected upstream:
+    # FRONTEND_CAPTCHA_REQUIRED / missing captcha_verify_param).
+    transport: str = os.getenv("ZAI_TRANSPORT", "browser")
+    browser_profile_dir: str = os.getenv(
+        "BROWSER_PROFILE_DIR", os.path.join("data", "browser-profile")
+    )
+    browser_proxy: str | None = os.getenv("BROWSER_PROXY")
     database_path: str = os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH)
     panel_password_env: str | None = os.getenv("PANEL_PASSWORD") or os.getenv("ADMIN_PASSWORD")
     api_password_env: str | None = os.getenv("API_PASSWORD")

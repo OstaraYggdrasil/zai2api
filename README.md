@@ -2,14 +2,18 @@
 
 OpenAI-compatible chat/completion proxy backed by `https://chat.z.ai/`.
 
-> **Known limitation (2026-10-01):** chat.z.ai now requires an interactive
+> **How the CAPTCHA is handled (2026-10-01):** chat.z.ai requires an
 > Alibaba Cloud slider CAPTCHA (`captcha_verify_param`) before **every**
 > chat completion (`enable_captcha: true` in `/api/config`; the server
 > rejects requests without it: `FRONTEND_CAPTCHA_REQUIRED` /
-> `missing_param`). A headless proxy cannot obtain this token without human
-> interaction per message, so `/v1/chat/completions` and `/v1/responses`
-> currently fail upstream even with a valid account. Everything else
-> (auth, session refresh, chat creation, `/v1/models`, admin panel) works.
+> `missing_param`). Raw HTTP cannot obtain this token, so the default
+> transport (`ZAI_TRANSPORT=browser`) drives the real webpage through a
+> headed Chromium with a persistent profile: the site's own JavaScript
+> mints the token transparently, exactly like a normal browser session.
+> The page's `/api/v2/chat/completions` SSE stream is captured via an
+> injected `fetch` hook, so streaming, reasoning output and usage all work
+> end to end. Set `ZAI_TRANSPORT=http` to use the legacy raw-HTTP
+> transport (currently rejected upstream).
 
 ## Features
 
@@ -18,11 +22,15 @@ OpenAI-compatible chat/completion proxy backed by `https://chat.z.ai/`.
 - Creates a fresh upstream chat for every request
 - Preserves reasoning output separately from final answer text
 - Reuses `ZAI_SESSION_TOKEN` directly or refreshes it from `ZAI_JWT`
+- Browser transport passes the completion CAPTCHA with zero interaction
 
 ## Requirements
 
 - Python 3.12+
 - `uv`
+- Playwright + a Chromium build (`pip install playwright && playwright install chromium`;
+  the browser transport launches it headed, using Xvfb automatically when no
+  display is present)
 - One of:
   - `ZAI_JWT`
   - `ZAI_SESSION_TOKEN`
@@ -55,6 +63,9 @@ Default bind address is `0.0.0.0:8000`.
 - `PORT`: defaults to `8000`
 - `LOG_LEVEL`: defaults to `info`
 - `REQUEST_TIMEOUT`: defaults to `120`
+- `ZAI_TRANSPORT`: `browser` (default) or `http` — see the note at the top
+- `BROWSER_PROFILE_DIR`: persistent Chromium profile dir, defaults to `data/browser-profile`
+- `BROWSER_PROXY`: proxy URL for the browser (e.g. `http://127.0.0.1:8899`); when unset, a local forward proxy on `127.0.0.1:8899` is auto-detected, otherwise the browser goes direct
 
 ## Example requests
 
