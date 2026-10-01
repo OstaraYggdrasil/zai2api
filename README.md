@@ -2,6 +2,15 @@
 
 OpenAI-compatible chat/completion proxy backed by `https://chat.z.ai/`.
 
+> **Known limitation (2026-10-01):** chat.z.ai now requires an interactive
+> Alibaba Cloud slider CAPTCHA (`captcha_verify_param`) before **every**
+> chat completion (`enable_captcha: true` in `/api/config`; the server
+> rejects requests without it: `FRONTEND_CAPTCHA_REQUIRED` /
+> `missing_param`). A headless proxy cannot obtain this token without human
+> interaction per message, so `/v1/chat/completions` and `/v1/responses`
+> currently fail upstream even with a valid account. Everything else
+> (auth, session refresh, chat creation, `/v1/models`, admin panel) works.
+
 ## Features
 
 - Supports `POST /v1/chat/completions`
@@ -38,8 +47,10 @@ Default bind address is `0.0.0.0:8000`.
 
 - `ZAI_JWT`: preferred auth source; used to fetch a fresh session token
 - `ZAI_SESSION_TOKEN`: optional direct session token reuse
-- `DEFAULT_MODEL`: defaults to `glm-5`
-- Available public model ids: `glm-5`, `glm-5.1`, `glm-5-turbo` and their `-nothinking` variants
+- `DEFAULT_MODEL`: defaults to `glm-5.3`
+- Available public model ids (synced with chat.z.ai, 2026-10-01): `glm-5.3`, `glm-5.3-flash`, `glm-5.2`, `glm-5-turbo`, `glm-5v-turbo`, `glm-4.7`, `glm-4.6v`, `glm-4.5`, `glm-4.5-air`
+- `-nothinking` variants are offered for models whose upstream capabilities allow disabling thinking (`glm-5.2`, `glm-5-turbo`, `glm-5v-turbo`, `glm-4.7`)
+- Legacy ids `glm-5` and `glm-5.1` still work and map to `glm-5.3` / `glm-5.2`
 - `HOST`: defaults to `0.0.0.0`
 - `PORT`: defaults to `8000`
 - `LOG_LEVEL`: defaults to `info`
@@ -53,7 +64,7 @@ Default bind address is `0.0.0.0:8000`.
 curl http://127.0.0.1:8000/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "model": "glm-5",
+    "model": "glm-5.3",
     "messages": [
       {"role": "system", "content": "Be concise."},
       {"role": "user", "content": "Say hello."}

@@ -87,12 +87,39 @@ class AppServices:
 
 
 NOTHINKING_MODEL_SUFFIX = "-nothinking"
+
+# Public model id -> upstream chat.z.ai model id.
+# Synced with https://chat.z.ai/api/models (checked 2026-10-01).
 PUBLIC_MODEL_ALIASES: dict[str, str] = {
-    "glm-5": "glm-5",
-    "glm-5.1": "GLM-5.1",
+    "glm-5.3": "glm-5.3",
+    "glm-5.3-flash": "x-preview-l",
+    "glm-5.2": "glm-5.2",
     "glm-5-turbo": "GLM-5-Turbo",
+    "glm-5v-turbo": "GLM-5v-Turbo",
+    "glm-4.7": "glm-4.7",
+    "glm-4.6v": "glm-4.6v",
+    "glm-4.5": "0727-360B-API",
+    "glm-4.5-air": "0727-106B-API",
 }
-UPSTREAM_MODEL_ALIASES: dict[str, str] = {upstream: public for public, upstream in PUBLIC_MODEL_ALIASES.items()}
+
+# Retired public ids kept working for existing clients; mapped to successors.
+LEGACY_MODEL_ALIASES: dict[str, str] = {
+    "glm-5": "glm-5.3",
+    "glm-5.1": "glm-5.2",
+}
+
+# Upstream ids whose capabilities report skip_think/free_think support, i.e. the
+# only ones for which a "-nothinking" variant is advertised.
+NOTHINKING_SUPPORTED_UPSTREAM: frozenset[str] = frozenset(
+    {"glm-5.2", "GLM-5-Turbo", "GLM-5v-Turbo", "glm-4.7"}
+)
+
+UPSTREAM_MODEL_ALIASES: dict[str, str] = {
+    upstream: public for public, upstream in PUBLIC_MODEL_ALIASES.items()
+}
+for _legacy_public, _legacy_upstream in LEGACY_MODEL_ALIASES.items():
+    # Never let a retired id shadow the canonical public id of a live model.
+    UPSTREAM_MODEL_ALIASES.setdefault(_legacy_upstream, _legacy_public)
 
 
 def create_app(
@@ -1070,13 +1097,25 @@ def available_models(services: AppServices) -> list[str]:
     for model in PUBLIC_MODEL_ALIASES:
         if model not in models:
             models.append(model)
-    return [alias for model in models for alias in (model, f"{model}{NOTHINKING_MODEL_SUFFIX}")]
+    result: list[str] = []
+    for model in models:
+        result.append(model)
+        upstream = public_to_upstream_model(strip_nothinking_suffix(model))
+        if upstream in NOTHINKING_SUPPORTED_UPSTREAM:
+            result.append(f"{model}{NOTHINKING_MODEL_SUFFIX}")
+    return result
+
+
+def strip_nothinking_suffix(model: str) -> str:
+    if model.lower().endswith(NOTHINKING_MODEL_SUFFIX):
+        return model[: -len(NOTHINKING_MODEL_SUFFIX)] or model
+    return model
 
 
 def resolve_model_request(requested_model: str) -> tuple[str, bool]:
     normalized_model = normalize_public_model_name(requested_model)
-    if normalized_model.endswith(NOTHINKING_MODEL_SUFFIX):
-        public_model = normalized_model[: -len(NOTHINKING_MODEL_SUFFIX)] or normalized_model
+    if normalized_model.lower().endswith(NOTHINKING_MODEL_SUFFIX):
+        public_model = strip_nothinking_suffix(normalized_model)
         return public_to_upstream_model(public_model), False
     return public_to_upstream_model(normalized_model), True
 
@@ -1084,9 +1123,9 @@ def resolve_model_request(requested_model: str) -> tuple[str, bool]:
 def normalize_public_model_name(requested_model: str) -> str:
     normalized_model = requested_model.strip()
     if not normalized_model:
-        return "glm-5"
+        return "glm-5.3"
     has_nothinking = normalized_model.lower().endswith(NOTHINKING_MODEL_SUFFIX)
-    base_model = normalized_model[: -len(NOTHINKING_MODEL_SUFFIX)] if has_nothinking else normalized_model
+    base_model = strip_nothinking_suffix(normalized_model) if has_nothinking else normalized_model
     public_model = canonical_public_model_name(base_model)
     if has_nothinking:
         return f"{public_model}{NOTHINKING_MODEL_SUFFIX}"
@@ -1094,12 +1133,14 @@ def normalize_public_model_name(requested_model: str) -> str:
 
 
 def public_to_upstream_model(public_model: str) -> str:
-    return PUBLIC_MODEL_ALIASES.get(public_model, public_model)
+    if public_model in PUBLIC_MODEL_ALIASES:
+        return PUBLIC_MODEL_ALIASES[public_model]
+    return LEGACY_MODEL_ALIASES.get(public_model, public_model)
 
 
 def canonical_public_model_name(requested_model: str) -> str:
     lower_model = requested_model.lower()
-    if lower_model in PUBLIC_MODEL_ALIASES:
+    if lower_model in PUBLIC_MODEL_ALIASES or lower_model in LEGACY_MODEL_ALIASES:
         return lower_model
     return UPSTREAM_MODEL_ALIASES.get(requested_model, requested_model)
 

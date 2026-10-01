@@ -52,7 +52,7 @@ def make_settings(tmp_path: Path, **overrides: object) -> Settings:
         zai_base_url="https://chat.z.ai",
         zai_jwt=None,
         zai_session_token=None,
-        default_model="glm-5",
+        default_model="glm-5.3",
         request_timeout=120.0,
         database_path=str(tmp_path / "state.db"),
         panel_password_env=None,
@@ -92,15 +92,29 @@ def test_api_auth_is_disabled_by_default(tmp_path: Path) -> None:
         models = client.get("/v1/models")
         assert models.status_code == 200
         model_ids = [item["id"] for item in models.json()["data"]]
-        assert model_ids == ["glm-5", "glm-5-nothinking"]
+        assert model_ids == [
+            "glm-5.3",
+            "glm-5.3-flash",
+            "glm-5.2",
+            "glm-5.2-nothinking",
+            "glm-5-turbo",
+            "glm-5-turbo-nothinking",
+            "glm-5v-turbo",
+            "glm-5v-turbo-nothinking",
+            "glm-4.7",
+            "glm-4.7-nothinking",
+            "glm-4.6v",
+            "glm-4.5",
+            "glm-4.5-air",
+        ]
 
         response = client.post(
             "/v1/chat/completions",
-            json={"model": "glm-5", "messages": [{"role": "user", "content": "hi"}]},
+            json={"model": "glm-5.3", "messages": [{"role": "user", "content": "hi"}]},
         )
         assert response.status_code == 200
         assert response.json()["choices"][0]["message"]["content"].startswith("echo:")
-        assert upstream.calls[-1]["model"] == "glm-5"
+        assert upstream.calls[-1]["model"] == "glm-5.3"
         assert upstream.calls[-1]["enable_thinking"] is True
 
 
@@ -111,12 +125,34 @@ def test_nothinking_model_variant_disables_thinking(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.post(
             "/v1/chat/completions",
-            json={"model": "glm-5-nothinking", "messages": [{"role": "user", "content": "hi"}]},
+            json={"model": "glm-5.2-nothinking", "messages": [{"role": "user", "content": "hi"}]},
         )
         assert response.status_code == 200
-        assert response.json()["model"] == "glm-5-nothinking"
-        assert upstream.calls[-1]["model"] == "glm-5"
+        assert response.json()["model"] == "glm-5.2-nothinking"
+        assert upstream.calls[-1]["model"] == "glm-5.2"
         assert upstream.calls[-1]["enable_thinking"] is False
+
+
+def test_legacy_model_aliases_map_to_successors(tmp_path: Path) -> None:
+    upstream = FakeUpstreamClient()
+    app = create_app(make_settings(tmp_path), upstream_client=upstream)
+
+    with TestClient(app) as client:
+        first = client.post(
+            "/v1/chat/completions",
+            json={"model": "glm-5", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert first.status_code == 200
+        assert upstream.calls[-1]["model"] == "glm-5.3"
+        assert upstream.calls[-1]["enable_thinking"] is True
+
+        second = client.post(
+            "/v1/chat/completions",
+            json={"model": "glm-5.1", "messages": [{"role": "user", "content": "hi"}]},
+        )
+        assert second.status_code == 200
+        assert upstream.calls[-1]["model"] == "glm-5.2"
+        assert upstream.calls[-1]["enable_thinking"] is True
 
 
 def test_api_auth_rejects_missing_or_invalid_password(tmp_path: Path) -> None:

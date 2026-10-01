@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 import time
 import uuid
 from dataclasses import dataclass
@@ -15,7 +16,8 @@ import httpx
 
 from .config import Settings
 
-FE_VERSION = "prod-fe-1.0.272"
+FE_VERSION_FALLBACK = "prod-fe-1.1.98"
+FE_VERSION_PATTERN = re.compile(rb"prod-fe-[0-9.]+")
 SIGNING_SECRET = "key-@@@@)))()((9))-xxxx&&&%%%%%"
 USER_AGENT = "Mozilla/5.0"
 
@@ -64,11 +66,12 @@ class ZAIClient:
             timeout=settings.request_timeout,
             headers={
                 "User-Agent": USER_AGENT,
-                "X-FE-Version": FE_VERSION,
+                "X-FE-Version": FE_VERSION_FALLBACK,
                 "Accept-Language": "en-US",
             },
         )
         self._lock = asyncio.Lock()
+        self._fe_version: str | None = None
         self._session: SessionState | None = None
         if self.zai_session_token:
             self._session = self._session_from_token(self.zai_session_token)
@@ -76,10 +79,33 @@ class ZAIClient:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def current_fe_version(self) -> str:
+        """Best-effort fetch of the site's current frontend version.
+
+        chat.z.ai rejects API calls whose X-FE-Version is stale ("Please refresh
+        the page to update the app"), so refresh it from the homepage and cache
+        the result. Falls back to the last known good version on any failure.
+        """
+        if self._fe_version:
+            return self._fe_version
+        try:
+            response = await self._client.get("/")
+            match = FE_VERSION_PATTERN.search(response.content)
+            if match:
+                self._fe_version = match.group(0).decode()
+        except Exception:
+            pass
+        if not self._fe_version:
+            self._fe_version = FE_VERSION_FALLBACK
+        self._client.headers["X-FE-Version"] = self._fe_version
+        return self._fe_version
+
     async def ensure_session(self, force_refresh: bool = False) -> SessionState:
         async with self._lock:
             if self._session and not force_refresh:
                 return self._session
+
+            await self.current_fe_version()
 
             if self.zai_jwt:
                 response = await self._client.get(
