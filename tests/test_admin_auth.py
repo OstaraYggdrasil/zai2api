@@ -97,15 +97,6 @@ def test_api_auth_is_disabled_by_default(tmp_path: Path) -> None:
             "glm-5.3-flash",
             "glm-5.2",
             "glm-5.2-nothinking",
-            "glm-5-turbo",
-            "glm-5-turbo-nothinking",
-            "glm-5v-turbo",
-            "glm-5v-turbo-nothinking",
-            "glm-4.7",
-            "glm-4.7-nothinking",
-            "glm-4.6v",
-            "glm-4.5",
-            "glm-4.5-air",
         ]
 
         response = client.post(

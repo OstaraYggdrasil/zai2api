@@ -89,17 +89,13 @@ class AppServices:
 NOTHINKING_MODEL_SUFFIX = "-nothinking"
 
 # Public model id -> upstream chat.z.ai model id.
-# Synced with https://chat.z.ai/api/models (checked 2026-10-01).
+# Synced with the chat.z.ai webpage model selector on 2026-10-01
+# (verified in-page; DOM data-value attributes: GLM-5.3-Flash -> x-preview-l,
+# GLM-5.3 -> glm-5.3, GLM-5.2 -> glm-5.2).
 PUBLIC_MODEL_ALIASES: dict[str, str] = {
     "glm-5.3": "glm-5.3",
     "glm-5.3-flash": "x-preview-l",
     "glm-5.2": "glm-5.2",
-    "glm-5-turbo": "GLM-5-Turbo",
-    "glm-5v-turbo": "GLM-5v-Turbo",
-    "glm-4.7": "glm-4.7",
-    "glm-4.6v": "glm-4.6v",
-    "glm-4.5": "0727-360B-API",
-    "glm-4.5-air": "0727-106B-API",
 }
 
 # Retired public ids kept working for existing clients; mapped to successors.
@@ -109,10 +105,9 @@ LEGACY_MODEL_ALIASES: dict[str, str] = {
 }
 
 # Upstream ids whose capabilities report skip_think/free_think support, i.e. the
-# only ones for which a "-nothinking" variant is advertised.
-NOTHINKING_SUPPORTED_UPSTREAM: frozenset[str] = frozenset(
-    {"glm-5.2", "GLM-5-Turbo", "GLM-5v-Turbo", "glm-4.7"}
-)
+# only ones for which a "-nothinking" variant is advertised. (On the webpage the
+# deep-thinking toggle is locked ON for GLM-5.3 / GLM-5.3-Flash.)
+NOTHINKING_SUPPORTED_UPSTREAM: frozenset[str] = frozenset({"glm-5.2"})
 
 UPSTREAM_MODEL_ALIASES: dict[str, str] = {
     upstream: public for public, upstream in PUBLIC_MODEL_ALIASES.items()

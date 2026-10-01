@@ -48,8 +48,8 @@ Default bind address is `0.0.0.0:8000`.
 - `ZAI_JWT`: preferred auth source; used to fetch a fresh session token
 - `ZAI_SESSION_TOKEN`: optional direct session token reuse
 - `DEFAULT_MODEL`: defaults to `glm-5.3`
-- Available public model ids (synced with chat.z.ai, 2026-10-01): `glm-5.3`, `glm-5.3-flash`, `glm-5.2`, `glm-5-turbo`, `glm-5v-turbo`, `glm-4.7`, `glm-4.6v`, `glm-4.5`, `glm-4.5-air`
-- `-nothinking` variants are offered for models whose upstream capabilities allow disabling thinking (`glm-5.2`, `glm-5-turbo`, `glm-5v-turbo`, `glm-4.7`)
+- Available public model ids (synced with the chat.z.ai webpage model selector, 2026-10-01): `glm-5.3`, `glm-5.3-flash`, `glm-5.2`
+- A `-nothinking` variant is offered for `glm-5.2` (the only webpage model whose upstream capabilities allow disabling thinking; the webpage locks deep thinking ON for GLM-5.3 / GLM-5.3-Flash)
 - Legacy ids `glm-5` and `glm-5.1` still work and map to `glm-5.3` / `glm-5.2`
 - `HOST`: defaults to `0.0.0.0`
 - `PORT`: defaults to `8000`
