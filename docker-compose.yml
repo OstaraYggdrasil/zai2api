@@ -1,13 +1,25 @@
 services:
   zai2api:
-    image: ${ZAI2API_IMAGE:-ghcr.io/orbitoo/zai2api:latest}
-    pull_policy: always
+    # Build the local Dockerfile so the browser transport (playwright +
+    # Chromium + Xvfb) is included; upstream images predate it.
+    build: .
+    image: ${ZAI2API_IMAGE:-zai2api:local}
     restart: unless-stopped
     env_file:
       - .env
     environment:
       HOST: 0.0.0.0
       PORT: 8000
+      # browser (default): drive chat.z.ai through a headed Chromium so the
+      # site's JS mints the completion CAPTCHA token transparently.
+      # http: legacy raw-HTTP transport (currently rejected upstream).
+      ZAI_TRANSPORT: ${ZAI_TRANSPORT:-browser}
+      # Persistent Chromium profiles, one subdir per account. Lives inside
+      # the mounted data volume so logins survive container restarts.
+      BROWSER_PROFILE_DIR: ${BROWSER_PROFILE_DIR:-/app/data/browser-profile}
+      # Proxy for the browser only (optional). The app auto-detects a local
+      # forward proxy on 127.0.0.1:8899 when this is unset.
+      BROWSER_PROXY: ${BROWSER_PROXY:-}
     ports:
       - "${BIND_HOST:-127.0.0.1}:${HOST_PORT:-8000}:8000"
     volumes:

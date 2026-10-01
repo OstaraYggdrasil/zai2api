@@ -28,7 +28,14 @@ COPY --from=ghcr.io/astral-sh/uv:0.8.18 /uv /uvx /bin/
 WORKDIR /app
 
 COPY --from=builder /app /app
-RUN mkdir -p /app/data
+
+# Browser transport needs a real Chromium plus its OS dependencies and a
+# virtual display (the app auto-starts Xvfb when no DISPLAY is present).
+RUN mkdir -p /app/data \
+    && apt-get update \
+    && /app/.venv/bin/playwright install --with-deps chromium \
+    && apt-get install -y --no-install-recommends xvfb \
+    && rm -rf /var/lib/apt/lists/*
 
 EXPOSE 8000
 VOLUME ["/app/data"]
