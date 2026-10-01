@@ -14,6 +14,14 @@ OpenAI-compatible chat/completion proxy backed by `https://chat.z.ai/`.
 > injected `fetch` hook, so streaming, reasoning output and usage all work
 > end to end. Set `ZAI_TRANSPORT=http` to use the legacy raw-HTTP
 > transport (currently rejected upstream).
+>
+> **Multiple accounts:** register extra accounts in the admin panel (or via
+> the accounts API) and requests round-robin across them. With the browser
+> transport each account gets its **own** headed Chromium and its **own**
+> persistent profile directory (`<BROWSER_PROFILE_DIR>/profile-<user-id>`),
+> so accounts never share storage, cookies or login tokens. Requests for
+> the same account are serialized through its browser; different accounts
+> run in parallel.
 
 ## Features
 
@@ -64,7 +72,7 @@ Default bind address is `0.0.0.0:8000`.
 - `LOG_LEVEL`: defaults to `info`
 - `REQUEST_TIMEOUT`: defaults to `120`
 - `ZAI_TRANSPORT`: `browser` (default) or `http` — see the note at the top
-- `BROWSER_PROFILE_DIR`: persistent Chromium profile dir, defaults to `data/browser-profile`
+- `BROWSER_PROFILE_DIR`: base directory for persistent Chromium profiles, defaults to `data/browser-profile`. With the browser transport each account gets its own subdirectory `profile-<user-id>` underneath it — keep this on persistent disk, not `/tmp`.
 - `BROWSER_PROXY`: proxy URL for the browser (e.g. `http://127.0.0.1:8899`); when unset, a local forward proxy on `127.0.0.1:8899` is auto-detected, otherwise the browser goes direct
 
 ## Example requests

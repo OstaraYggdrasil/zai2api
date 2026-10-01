@@ -10,6 +10,13 @@ drives the real chat UI and captures the page's own
 It implements the same interface as :class:`ZAIClient` (see
 ``SupportsZAIClient`` in ``account_pool.py``), reusing the HTTP client for
 auth/session work and the browser only for the completion stream.
+
+Multi-account: :class:`BrowserPool` keeps one persistent headed Chromium
+per chat.z.ai account (keyed by the account's user id, stable across
+session-token refreshes), each with its own profile directory, so accounts
+never share storage or tokens. Requests for the same account are
+serialized through that account's browser lock; different accounts run in
+parallel in their own browsers.
 """
 
 from __future__ import annotations
@@ -88,33 +95,81 @@ FETCH_HOOK_JS = r"""
 })();
 """
 
+# The login token is kept in a mutable window property (instead of being
+# baked into the init script) so refreshed session tokens propagate to
+# every later navigation.
+TOKEN_INIT_JS = (
+    "window.__zaiToken = {token};\n"
+    "try { if (window.__zaiToken) localStorage.setItem('token', window.__zaiToken); } catch (e) {}\n"
+)
+
+_xvfb_proc: subprocess.Popen[bytes] | None = None
+_xvfb_lock = asyncio.Lock()
+
+
+async def _ensure_xvfb() -> None:
+    """Start a process-wide Xvfb when no display is available (idempotent)."""
+    global _xvfb_proc
+    if os.environ.get("DISPLAY"):
+        return
+    async with _xvfb_lock:
+        if os.environ.get("DISPLAY"):
+            return
+        if _xvfb_proc is not None and _xvfb_proc.poll() is None:
+            os.environ["DISPLAY"] = ":99"
+            return
+        try:
+            _xvfb_proc = subprocess.Popen(
+                ["Xvfb", ":99", "-screen", "0", "1366x900x24"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                "The browser transport needs a display: install Xvfb "
+                "or run under xvfb-run."
+            ) from exc
+        os.environ["DISPLAY"] = ":99"
+        await asyncio.sleep(1.0)
+
+
+def _teardown_xvfb() -> None:
+    global _xvfb_proc
+    if _xvfb_proc is not None:
+        try:
+            _xvfb_proc.terminate()
+        except Exception:
+            pass
+        _xvfb_proc = None
+
 
 class SharedBrowser:
-    """Owns one persistent headed Chromium used by all browser clients."""
+    """One persistent headed Chromium logged into a single chat.z.ai account."""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, profile_dir: str):
         self._settings = settings
+        self._profile_dir = profile_dir
         self._lock = asyncio.Lock()
         self._pw: Any = None
         self._ctx: Any = None
         self._page: Any = None
-        self._xvfb_proc: subprocess.Popen[bytes] | None = None
         self._started = False
 
     def lock(self) -> asyncio.Lock:
         return self._lock
 
     async def ensure_page(self, token: str) -> Any:
-        """Start the browser on first use and return the shared page."""
-        if self._started and self._page is not None:
-            try:
-                await self._page.evaluate(
-                    f"localStorage.setItem('token', {json.dumps(token)})"
-                )
-            except Exception:
-                pass
+        """Start the browser on first use (or relaunch if it died) and
+        return the page, with the current login token applied."""
+        if (
+            self._started
+            and self._page is not None
+            and not self._page.is_closed()
+        ):
+            await self._apply_token(self._page, token)
             return self._page
 
+        await self._reset()
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
@@ -123,11 +178,11 @@ class SharedBrowser:
                 "(pip install playwright) and a Chromium build."
             ) from exc
 
-        await self._ensure_xvfb()
+        await _ensure_xvfb()
         self._pw = await async_playwright().start()
         proxy = self._proxy_config()
         launch_kwargs: dict[str, Any] = {
-            "user_data_dir": self._settings.browser_profile_dir,
+            "user_data_dir": self._profile_dir,
             "headless": False,
             "ignore_https_errors": True,
             "user_agent": (
@@ -147,7 +202,7 @@ class SharedBrowser:
             launch_kwargs["proxy"] = proxy
         self._ctx = await self._pw.chromium.launch_persistent_context(**launch_kwargs)
         await self._ctx.add_init_script(
-            f"localStorage.setItem('token', {json.dumps(token)});\n" + FETCH_HOOK_JS
+            TOKEN_INIT_JS.format(token=json.dumps(token)) + FETCH_HOOK_JS
         )
         self._page = await self._ctx.new_page()
         await self._page.goto(
@@ -158,22 +213,12 @@ class SharedBrowser:
         self._started = True
         return self._page
 
-    async def _ensure_xvfb(self) -> None:
-        if os.environ.get("DISPLAY"):
-            return
+    @staticmethod
+    async def _apply_token(page: Any, token: str) -> None:
         try:
-            self._xvfb_proc = subprocess.Popen(
-                ["Xvfb", ":99", "-screen", "0", "1366x900x24"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                "The browser transport needs a display: install Xvfb "
-                "or run under xvfb-run."
-            ) from exc
-        os.environ["DISPLAY"] = ":99"
-        await asyncio.sleep(1.0)
+            await page.evaluate(TOKEN_INIT_JS.format(token=json.dumps(token)))
+        except Exception:
+            pass
 
     def _proxy_config(self) -> dict[str, str] | None:
         proxy_url = self._settings.browser_proxy
@@ -188,7 +233,7 @@ class SharedBrowser:
                 proxy_url = None
         return {"server": proxy_url} if proxy_url else None
 
-    async def aclose(self) -> None:
+    async def _reset(self) -> None:
         if self._ctx is not None:
             try:
                 await self._ctx.close()
@@ -202,13 +247,47 @@ class SharedBrowser:
                 pass
             self._pw = None
         self._page = None
-        if self._xvfb_proc is not None:
-            try:
-                self._xvfb_proc.terminate()
-            except Exception:
-                pass
-            self._xvfb_proc = None
         self._started = False
+
+    async def aclose(self) -> None:
+        await self._reset()
+
+
+class BrowserPool:
+    """Owns one :class:`SharedBrowser` per chat.z.ai account.
+
+    Keyed by the account's user id (stable across session-token refreshes);
+    each account gets its own persistent profile directory under
+    ``settings.browser_profile_dir``. Browsers start lazily on first use.
+    """
+
+    def __init__(self, settings: Settings):
+        self._settings = settings
+        self._browsers: dict[str, SharedBrowser] = {}
+        self._lock = asyncio.Lock()
+
+    def profile_dir_for(self, user_id: str) -> str:
+        safe = "".join(c for c in user_id if c.isalnum() or c in "-_")
+        return os.path.join(self._settings.browser_profile_dir, f"profile-{safe}")
+
+    async def get(self, user_id: str) -> SharedBrowser:
+        async with self._lock:
+            browser = self._browsers.get(user_id)
+            if browser is None:
+                browser = SharedBrowser(self._settings, self.profile_dir_for(user_id))
+                self._browsers[user_id] = browser
+            return browser
+
+    def __len__(self) -> int:
+        return len(self._browsers)
+
+    async def aclose(self) -> None:
+        async with self._lock:
+            browsers = list(self._browsers.values())
+            self._browsers.clear()
+        for browser in browsers:
+            await browser.aclose()
+        _teardown_xvfb()
 
 
 class BrowserZAIClient:
@@ -217,13 +296,13 @@ class BrowserZAIClient:
     def __init__(
         self,
         settings: Settings,
-        shared: SharedBrowser,
+        pool: BrowserPool,
         *,
         zai_jwt: str | None = None,
         zai_session_token: str | None = None,
     ):
         self.settings = settings
-        self._shared = shared
+        self._pool = pool
         self._http = ZAIClient(
             settings, zai_jwt=zai_jwt, zai_session_token=zai_session_token
         )
@@ -235,7 +314,8 @@ class BrowserZAIClient:
         return await self._http.verify_completion_version()
 
     async def aclose(self) -> None:
-        # The shared browser outlives per-request clients.
+        # Account browsers outlive per-request clients; only the HTTP
+        # session helper is closed here.
         await self._http.aclose()
 
     async def collect_prompt(
@@ -284,9 +364,10 @@ class BrowserZAIClient:
         if label is None:
             raise RuntimeError(f"Browser transport has no UI label for model {model!r}")
         session = await self.ensure_session()
+        browser = await self._pool.get(session.user_id)
 
-        async with self._shared.lock():
-            page = await self._shared.ensure_page(session.token)
+        async with browser.lock():
+            page = await browser.ensure_page(session.token)
             await self._new_chat(page)
             await self._select_model(page, label)
             await page.evaluate(
@@ -384,13 +465,13 @@ class BrowserZAIClient:
 
 
 def make_browser_client_factory(
-    settings: Settings, shared: SharedBrowser
+    settings: Settings, pool: BrowserPool
 ) -> Callable[[str | None, str | None], BrowserZAIClient]:
     def factory(
         zai_jwt: str | None, zai_session_token: str | None
     ) -> BrowserZAIClient:
         return BrowserZAIClient(
-            settings, shared, zai_jwt=zai_jwt, zai_session_token=zai_session_token
+            settings, pool, zai_jwt=zai_jwt, zai_session_token=zai_session_token
         )
 
     return factory

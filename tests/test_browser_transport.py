@@ -106,7 +106,7 @@ def test_browser_transport_is_default_and_wires_pool(tmp_path):
     app = create_app(app_settings=settings)
     with TestClient(app):
         services = app.state.services
-        assert services.managed_browser is not None
+        assert services.managed_browser_pool is not None
         assert isinstance(services.account_pool, AccountPool)
         assert services.prompt_pool is services.account_pool
 
@@ -116,7 +116,7 @@ def test_http_transport_wires_plain_pool(tmp_path):
     app = create_app(app_settings=settings)
     with TestClient(app):
         services = app.state.services
-        assert services.managed_browser is None
+        assert services.managed_browser_pool is None
         assert isinstance(services.account_pool, AccountPool)
 
 
@@ -125,22 +125,44 @@ def test_browser_client_factory_builds_clients(tmp_path, monkeypatch):
     # httpx client construction under test does not depend on it.
     monkeypatch.setenv("no_proxy", "localhost,127.0.0.1,::1")
     monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1,::1")
-    from zai2api.browser_client import BrowserZAIClient, SharedBrowser
+    from zai2api.browser_client import BrowserPool, BrowserZAIClient
 
     settings = make_settings(tmp_path, transport="browser")
-    shared = SharedBrowser(settings)
-    factory = make_browser_client_factory(settings, shared)
+    pool = BrowserPool(settings)
+    factory = make_browser_client_factory(settings, pool)
     client = factory("jwt", None)
     assert isinstance(client, BrowserZAIClient)
-    assert isinstance(client._shared, SharedBrowser)
+    assert isinstance(client._pool, BrowserPool)
 
 
-def test_browser_shared_browser_not_started_by_wiring(tmp_path):
-    # Creating the app must not launch Chromium; the browser starts lazily
-    # on the first completion request.
-    from zai2api.browser_client import SharedBrowser
+def test_browser_pool_keys_browsers_per_user(tmp_path):
+    import asyncio
+
+    from zai2api.browser_client import BrowserPool, SharedBrowser
 
     settings = make_settings(tmp_path, transport="browser")
-    shared = SharedBrowser(settings)
-    assert shared._started is False
-    assert shared._page is None
+    pool = BrowserPool(settings)
+
+    async def get_both():
+        a1 = await pool.get("user-aaa")
+        a2 = await pool.get("user-aaa")
+        b = await pool.get("user-bbb")
+        return a1, a2, b
+
+    a1, a2, b = asyncio.run(get_both())
+    assert isinstance(a1, SharedBrowser)
+    assert a1 is a2  # same account -> same browser
+    assert b is not a1  # different account -> different browser
+    assert len(pool) == 2
+    assert "user-aaa" in a1._profile_dir and "user-bbb" in b._profile_dir
+    assert a1._profile_dir != b._profile_dir
+
+
+def test_browser_pool_starts_empty(tmp_path):
+    # Creating the pool must not launch Chromium; browsers start lazily
+    # on the first completion request.
+    from zai2api.browser_client import BrowserPool
+
+    settings = make_settings(tmp_path, transport="browser")
+    pool = BrowserPool(settings)
+    assert len(pool) == 0
